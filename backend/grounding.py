@@ -1,5 +1,7 @@
-"""Flag quoted passages that do not appear word for word in the excerpts."""
+"""Keep quotation marks honest: only text found word for word in the excerpts stays in quotes."""
 import re
+
+QUOTE = re.compile(r'["\u201c]([^"\u201c\u201d]{20,}?)["\u201d]')
 
 
 def _norm(s: str) -> str:
@@ -9,17 +11,25 @@ def _norm(s: str) -> str:
     return " ".join(s.split())
 
 
-def quoted_segments(text: str):
-    parts = re.split(r'["\u201c\u201d]', text)
-    return [p for i, p in enumerate(parts)
-            if i % 2 == 1 and i < len(parts) - 1 and len(p.split()) >= 6]
+def _is_verbatim(quote: str, haystack: str) -> bool:
+    pieces = [p for p in re.split(r"\.\.\.|\u2026", quote) if len(p.split()) >= 4]
+    return (not pieces) or all(_norm(p) in haystack for p in pieces)
+
+
+def dequote(text: str, results: list):
+    """Return (clean_text, removed). Quotes of 6+ words that are not verbatim lose their quote marks."""
+    haystack = _norm(" ".join(r["content"] for r in results))
+    removed = []
+
+    def fix(m):
+        q = m.group(1)
+        if len(q.split()) < 6 or _is_verbatim(q, haystack):
+            return m.group(0)
+        removed.append(q.strip())
+        return q
+
+    return QUOTE.sub(fix, text), removed
 
 
 def unverified_quotes(text: str, results: list):
-    haystack = _norm(" ".join(r["content"] for r in results))
-    bad = []
-    for q in quoted_segments(text):
-        pieces = [p for p in re.split(r"\.\.\.|\u2026", q) if len(p.split()) >= 4]
-        if pieces and not all(_norm(p) in haystack for p in pieces):
-            bad.append(q.strip())
-    return bad
+    return dequote(text, results)[1]
