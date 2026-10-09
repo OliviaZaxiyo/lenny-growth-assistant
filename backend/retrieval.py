@@ -16,6 +16,12 @@ STOPWORDS = set(
     episode episodes""".split()
 )
 
+# Words used to ask for an essay or an artifact, not to search for
+STOPWORDS |= set(
+    "write essay article post html page create build make generate turn convert into "
+    "document markdown draft ship dashboard landing artifact based".split()
+)
+
 # Words found in more than this share of all chunks are too common to help
 MAX_SHARE = 0.10
 
@@ -78,10 +84,11 @@ def search(question: str, k: int = 6, per_episode: int = 2):
     results, per_ep, seen = [], {}, set()
     for slug, guest, title, yt, start, content, score in rows:
         fingerprint = content[:200]
-        if fingerprint in seen or per_ep.get(slug, 0) >= per_episode:
+        base = re.sub(r"-\d+$", "", slug)  # treat "x" and "x-20" as the same guest
+        if fingerprint in seen or per_ep.get(base, 0) >= per_episode:
             continue
         seen.add(fingerprint)
-        per_ep[slug] = per_ep.get(slug, 0) + 1
+        per_ep[base] = per_ep.get(base, 0) + 1
         results.append({
             "guest": guest,
             "title": title,
