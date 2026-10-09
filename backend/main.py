@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from artifacts import extract_artifact
 from db import connect
-from grounding import unverified_quotes
+from grounding import dequote
 from llm import LLMError, current_config, stream_chat
 from prompts import build_messages, revision_messages
 from retrieval import search
@@ -28,8 +28,15 @@ app = FastAPI(title="Lenny Growth Assistant")
 
 origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
 if os.getenv("FRONTEND_ORIGIN"):
-    origins.append(os.getenv("FRONTEND_ORIGIN"))
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["*"], allow_headers=["*"])
+    origins.append(os.getenv("FRONTEND_ORIGIN").strip().rstrip("/"))
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 NO_ANSWER = ("I couldn't find anything in the podcast transcripts that matches that question. "
              "Try rephrasing it or using more specific terms.")
@@ -187,11 +194,18 @@ def send_message(session_id: UUID, body: MessageIn):
                 yield sse("token", text=reply)
             else:
                 msgs = build_messages(skill, history, question, results, latest)
+                removed = []  # paraphrases that had their quotation marks removed
 
                 if skill == "artifact":
                     yield sse("status", message="Building your artifact...")
                     full = "".join(stream_chat(msgs, max_tokens=6000))
                     reply, artifact = extract_artifact(full)
+                    if results:
+                        reply, r1 = dequote(reply, results)
+                        removed += r1
+                        if artifact and artifact["type"] == "markdown":
+                            artifact["content"], r2 = dequote(artifact["content"], results)
+                            removed += r2
                     yield sse("token", text=reply)
                     if artifact:
                         artifact["version"] = n_art + 1
@@ -217,12 +231,14 @@ def send_message(session_id: UUID, body: MessageIn):
                                 pass  # keep the first draft
                         yield sse("meta", words=words)
 
-                # Flag quoted passages that are not word for word in the excerpts
-                if results:
-                    checked = reply + "\n" + (artifact["content"] if artifact else "")
-                    bad = unverified_quotes(checked, results)
-                    if bad:
-                        yield sse("check", unverified=bad[:5])
+                    if results:
+                        cleaned, r = dequote(reply, results)
+                        if r:
+                            reply, removed = cleaned, removed + r
+                            yield sse("replace", text=reply)
+
+                if removed:
+                    yield sse("check", unverified=removed[:5])
         except LLMError as e:
             yield sse("error", message=str(e))
         except psycopg.Error:
